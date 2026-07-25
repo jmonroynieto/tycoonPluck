@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=tycoonPluck
+Comment=Swipe-sort PDFs into categories
+Exec=tycoonPluck
+Icon=com.local.tycoonpluck
+Terminal=false
+Categories=Office;

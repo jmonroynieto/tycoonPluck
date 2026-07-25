@@ -1,0 +1,14 @@
+[Details]
+Name = "tycoonPluck"
+ID = "com.local.tycoonpluck"
+# Only read by the `fyne` packaging CLI, not by plain go build/run — the
+# runtime source of truth is internal/version.Version (see main.go). Keep
+# these in sync by hand.
+Version = "0.1.0"
+Build = 1
+Icon = "packaging/icons/icon.png"
+
+[Migrations]
+# Opt into the Fyne 2.6+ goroutine model (required before 2.9 removes the fallback).
+# Background preview updates use fyne.Do; without this flag Fyne logs a warning.
+fyneDo = true
