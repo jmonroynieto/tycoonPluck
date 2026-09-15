@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"tycoonPluck/internal/categories"
+	"tycoonPluck/internal/formats"
 )
 
 // UndoEntry records one category assignment that can be reversed.
@@ -25,9 +26,12 @@ type Sorter struct {
 	Queue        []string
 	UndoStack    []UndoEntry
 	TotalStarted int
+	// Expanded includes images, documents, tables, and text files in the
+	// queue (extension or MIME). PDFs are always eligible.
+	Expanded bool
 }
 
-// OpenFolder loads top-level PDF files from dir (non-recursive).
+// OpenFolder loads top-level eligible files from dir (non-recursive).
 func (s *Sorter) OpenFolder(dir string) (int, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -41,31 +45,87 @@ func (s *Sorter) OpenFolder(dir string) (int, error) {
 		return 0, fmt.Errorf("not a directory: %s", abs)
 	}
 
-	entries, err := os.ReadDir(abs)
+	files, err := listEligible(abs, s.Expanded, nil)
 	if err != nil {
 		return 0, err
 	}
+	// Random order each open so alphabetical sequence doesn't prime users.
+	rand.Shuffle(len(files), func(i, j int) {
+		files[i], files[j] = files[j], files[i]
+	})
 
-	var pdfs []string
+	s.SourceDir = abs
+	s.Queue = files
+	s.UndoStack = nil
+	s.TotalStarted = len(files)
+	return s.TotalStarted, nil
+}
+
+// Rescan rebuilds the queue from SourceDir using the current Expanded flag.
+// Files still eligible keep their order; newly eligible names are shuffled
+// onto the tail. skip is a set of basenames (session skips) to leave out.
+// Assign/skip progress (TotalStarted − remaining) is preserved.
+func (s *Sorter) Rescan(skip map[string]struct{}) error {
+	if s.SourceDir == "" {
+		return nil
+	}
+	files, err := listEligible(s.SourceDir, s.Expanded, skip)
+	if err != nil {
+		return err
+	}
+	eligible := make(map[string]struct{}, len(files))
+	for _, p := range files {
+		eligible[p] = struct{}{}
+	}
+	handled := s.TotalStarted - len(s.Queue)
+	if handled < 0 {
+		handled = 0
+	}
+	kept := make([]string, 0, len(s.Queue))
+	seen := make(map[string]struct{}, len(s.Queue))
+	for _, p := range s.Queue {
+		if _, ok := eligible[p]; !ok {
+			continue
+		}
+		kept = append(kept, p)
+		seen[p] = struct{}{}
+	}
+	var added []string
+	for _, p := range files {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		added = append(added, p)
+	}
+	rand.Shuffle(len(added), func(i, j int) {
+		added[i], added[j] = added[j], added[i]
+	})
+	s.Queue = append(kept, added...)
+	s.TotalStarted = handled + len(s.Queue)
+	return nil
+}
+
+func listEligible(dir string, expanded bool, skip map[string]struct{}) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if strings.EqualFold(filepath.Ext(name), ".pdf") {
-			pdfs = append(pdfs, filepath.Join(abs, name))
+		if _, drop := skip[name]; drop {
+			continue
 		}
+		path := filepath.Join(dir, name)
+		if !formats.Accept(path, expanded) {
+			continue
+		}
+		files = append(files, path)
 	}
-	// Random order each open so alphabetical sequence doesn't prime users.
-	rand.Shuffle(len(pdfs), func(i, j int) {
-		pdfs[i], pdfs[j] = pdfs[j], pdfs[i]
-	})
-
-	s.SourceDir = abs
-	s.Queue = pdfs
-	s.UndoStack = nil
-	s.TotalStarted = len(pdfs)
-	return s.TotalStarted, nil
+	return files, nil
 }
 
 // Current returns the path of the PDF being triaged, or "".

@@ -102,7 +102,7 @@ The icon itself is generated from `packaging/gen-icon.py` (three chunky arrows s
 
 ## How to use
 
-1. **Open folder** — pick a **directory** (the picker only lists folders, not files — by design). PDFs must sit at the **top level** of that folder (subfolders are not scanned).
+1. **Open folder** — pick a **directory** (the picker only lists folders, not files — by design). Files must sit at the **top level** of that folder (subfolders are not scanned). Review and Swipe queue PDFs by default. Tick **Expanded formats** in the sidebar to also queue images, documents, tables, and text files, matching on extension or MIME type. The toggle rescan keeps the current file in front.
 2. **Categories** (left) — start **empty**. Use **Add category** to create your own (saved under `~/.config/tycoonPluck/categories.json`). Nothing is preloaded. Hover a category to reveal a **×** — removes it from the list only; any folder already created for it (and files already sorted into it) is left untouched on disk. Re-adding the same name later picks the same folder back up.
 3. **Assign** — click a category → file moves to `that-folder/CategoryName/` → next PDF. Queue order is **random** each time you open a folder (not A–Z).
 4. **Preview pages** — up to the first **3 pages** render when the PDF has that many; page buttons appear under the preview only when there's more than one to show.
@@ -181,7 +181,7 @@ Always prefer **`make test`** or **`go test -tags x11 ./...`** so the root packa
 ### Known limitations (expected in v0)
 
 - Progress `n / total` is **session progress** (includes skips), not “files remaining on disk.”  
-- Only top-level PDFs are queued.  
+- Only top-level files are queued (PDFs, or the expanded-format set when that toggle is on). 
 - Look-and-feel is Fyne’s theme, not GTK/XFCE native widgets.  
 - First preview of a large PDF can take a moment (render is async).  
 

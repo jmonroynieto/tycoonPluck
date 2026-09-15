@@ -167,6 +167,67 @@ func TestRefreshShowsEmptyFolderMessage(t *testing.T) {
 	}
 }
 
+func TestExpandedFormatsToggleQueuesByExtensionAndMIME(t *testing.T) {
+	ui := newTestApp(t)
+	if ui.expandedCheck == nil || ui.expandedCheck.Checked {
+		t.Fatal("expanded formats should start off")
+	}
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "a.pdf"))
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "photo"), []byte("\xff\xd8\xff\xe0JFIF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ui.sorter.OpenFolder(dir); err != nil {
+		t.Fatal(err)
+	}
+	if ui.sorter.Remaining() != 1 {
+		t.Fatalf("PDF-only remaining = %d, want 1", ui.sorter.Remaining())
+	}
+	ui.expandedCheck.SetChecked(true)
+	if !ui.sorter.Expanded || ui.sorter.Remaining() != 3 {
+		t.Fatalf("expanded remaining = %d, expanded=%v", ui.sorter.Remaining(), ui.sorter.Expanded)
+	}
+	ui.expandedCheck.SetChecked(false)
+	if ui.sorter.Expanded || ui.sorter.Remaining() != 1 {
+		t.Fatalf("PDF-only after toggle remaining = %d", ui.sorter.Remaining())
+	}
+}
+
+func TestExpandedFormatsEmptyFolderMessage(t *testing.T) {
+	ui := newTestApp(t)
+	ui.expandedCheck.SetChecked(true)
+	dir := t.TempDir()
+	if _, err := ui.sorter.OpenFolder(dir); err != nil {
+		t.Fatal(err)
+	}
+	ui.refresh()
+	ui.waitForPreview()
+	if ui.placeholder.Text != "No matching files in this folder." {
+		t.Errorf("placeholder = %q", ui.placeholder.Text)
+	}
+}
+
+func TestExpandedFormatsKeepsSessionSkips(t *testing.T) {
+	ui := newTestApp(t)
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "a.pdf"))
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ui.sorter.OpenFolder(dir); err != nil {
+		t.Fatal(err)
+	}
+	ui.sorter.Queue = []string{filepath.Join(dir, "a.pdf")}
+	ui.onSkip()
+	ui.expandedCheck.SetChecked(true)
+	if ui.sorter.Remaining() != 1 || filepath.Base(ui.sorter.Current()) != "notes.txt" {
+		t.Fatalf("queue = %v, want only notes.txt", ui.sorter.Queue)
+	}
+}
+
 func TestRefreshShowsQueueEmptyMessageAfterAllAssigned(t *testing.T) {
 	ui := newTestApp(t)
 	withCategory(t, ui, "Work")

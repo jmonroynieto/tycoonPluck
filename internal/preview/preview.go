@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"image"
+	_ "image/gif"
+	_ "image/jpeg"
 	"image/png"
 	"os"
 	"os/exec"
@@ -12,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"tycoonPluck/internal/formats"
 )
 
 // RenderFirstPage draws page 1 of pdfPath as a PNG-backed image.
@@ -54,6 +58,33 @@ func RenderPagesContext(ctx context.Context, pdfPath string, dpi int, maxPages i
 	if _, err := os.Stat(pdfPath); err != nil {
 		return nil, err
 	}
+	switch formats.Classify(pdfPath) {
+	case formats.KindImage:
+		return renderImage(ctx, pdfPath)
+	case formats.KindPDF:
+		return renderPDF(ctx, pdfPath, dpi, maxPages)
+	default:
+		return nil, fmt.Errorf("no preview for this file type")
+	}
+}
+
+func renderImage(ctx context.Context, path string) ([]image.Image, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("cannot preview image: %w", err)
+	}
+	return []image.Image{img}, nil
+}
+
+func renderPDF(ctx context.Context, pdfPath string, dpi, maxPages int) ([]image.Image, error) {
 	if _, err := exec.LookPath("pdftoppm"); err != nil {
 		return nil, fmt.Errorf("pdftoppm not found — install Poppler (Manjaro: sudo pacman -S poppler)")
 	}

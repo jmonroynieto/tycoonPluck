@@ -853,3 +853,58 @@ func TestAssignDelegatesToAssignPath(t *testing.T) {
 		t.Errorf("Remaining = %d, want 0", s.Remaining())
 	}
 }
+
+func TestOpenFolderExpandedIncludesTextAndImages(t *testing.T) {
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "a.pdf"))
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "photo"), []byte("\xff\xd8\xff\xe0JFIF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Sorter{Expanded: true}
+	n, err := s.OpenFolder(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("got %d files, want 3", n)
+	}
+}
+
+func TestRescanTogglePreservesQueueHeadAndSkipSet(t *testing.T) {
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "a.pdf"))
+	touch(t, filepath.Join(dir, "b.pdf"))
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Sorter{}
+	if _, err := s.OpenFolder(dir); err != nil {
+		t.Fatal(err)
+	}
+	head := filepath.Join(dir, "b.pdf")
+	s.Queue = []string{head, filepath.Join(dir, "a.pdf")}
+	s.Expanded = true
+	if err := s.Rescan(map[string]struct{}{"a.pdf": {}}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Current() != head {
+		t.Errorf("current = %q, want %q", s.Current(), head)
+	}
+	got := map[string]bool{}
+	for _, p := range s.Queue {
+		got[filepath.Base(p)] = true
+	}
+	if !got["notes.txt"] || got["a.pdf"] || !got["b.pdf"] || s.Remaining() != 2 {
+		t.Fatalf("expanded queue = %v", s.Queue)
+	}
+	s.Expanded = false
+	if err := s.Rescan(map[string]struct{}{"a.pdf": {}}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Remaining() != 1 || s.Current() != head {
+		t.Errorf("PDF-only rescan = %v", s.Queue)
+	}
+}

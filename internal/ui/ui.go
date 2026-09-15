@@ -19,6 +19,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"tycoonPluck/internal/categories"
+	"tycoonPluck/internal/formats"
 	"tycoonPluck/internal/openext"
 	"tycoonPluck/internal/preview"
 	"tycoonPluck/internal/session"
@@ -55,6 +56,7 @@ type App struct {
 	undoBtn       *widget.Button
 	inspectBtn    *widget.Button
 	openBtn       *widget.Button
+	expandedCheck *widget.Check
 
 	// Multi-page preview: up to 3 pages, rendered together, one shown at a
 	// time via the pager buttons (hidden unless the current PDF has >1 page).
@@ -220,7 +222,9 @@ func (ui *App) build() {
 		ui.categoryBox,
 		addBtn,
 	)
-	sidebarBody := container.NewBorder(sidebarTop, ui.outputHint, nil, nil, layout.NewSpacer())
+	ui.expandedCheck = widget.NewCheck("Expanded formats", ui.onExpandedCheck)
+	sidebarBottom := container.NewVBox(ui.expandedCheck, ui.outputHint)
+	sidebarBody := container.NewBorder(sidebarTop, sidebarBottom, nil, nil, layout.NewSpacer())
 	sidebar := container.NewBorder(nil, nil, nil,
 		hairline(pal),
 		container.NewStack(
@@ -527,7 +531,7 @@ func (ui *App) onOpenFolder() {
 			ui.thumbs.Clear()
 		}
 		ui.applySessionForOpenFolder()
-		ui.setStatus(fmt.Sprintf("Loaded %d PDF(s) to sort.", ui.sorter.Remaining()))
+		ui.setStatus(ui.loadedStatus())
 		_ = n
 		ui.refresh()
 	}, ui.win)
@@ -546,6 +550,49 @@ func (ui *App) applySessionForOpenFolder() {
 	dir := ui.sorter.SourceDir
 	ui.sorter.DropBasenames(ui.journal.SkippedSet(dir))
 	ui.sorter.SetUndoStack(ui.journal.UndoEntriesStillOnDisk(dir))
+}
+
+func (ui *App) onExpandedCheck(on bool) {
+	if ui.sorter.Expanded == on {
+		return
+	}
+	ui.sorter.Expanded = on
+	if !ui.sorter.HasFolder() {
+		ui.refresh()
+		return
+	}
+	var skip map[string]struct{}
+	if ui.journal != nil {
+		skip = ui.journal.SkippedSet(ui.sorter.SourceDir)
+	}
+	if err := ui.sorter.Rescan(skip); err != nil {
+		dialog.ShowError(err, ui.win)
+		return
+	}
+	ui.setStatus(ui.loadedStatus())
+	ui.refresh()
+}
+
+func (ui *App) loadedStatus() string {
+	n := ui.sorter.Remaining()
+	if ui.sorter.Expanded {
+		return fmt.Sprintf("Loaded %d file(s) to sort.", n)
+	}
+	return fmt.Sprintf("Loaded %d PDF(s) to sort.", n)
+}
+
+func (ui *App) emptyFolderHint() string {
+	if ui.sorter.Expanded {
+		return "No matching files in this folder."
+	}
+	return "No PDFs in this folder."
+}
+
+func (ui *App) openFolderHint(action string) string {
+	if ui.sorter.Expanded {
+		return "Open a folder of files to begin " + action + "."
+	}
+	return "Open a folder of PDFs to begin " + action + "."
 }
 
 func (ui *App) onAddCategory() {
@@ -800,9 +847,15 @@ func (ui *App) refreshReview() {
 	if hasCurrent {
 		ui.skipBtn.Enable()
 		ui.inspectBtn.Enable()
+		if formats.Classify(ui.sorter.Current()) == formats.KindPDF {
+			ui.inspectBtn.SetText("Open PDF")
+		} else {
+			ui.inspectBtn.SetText("Open file")
+		}
 	} else {
 		ui.skipBtn.Disable()
 		ui.inspectBtn.Disable()
+		ui.inspectBtn.SetText("Open PDF")
 	}
 	if ui.sorter.CanUndo() {
 		ui.undoBtn.Enable()
@@ -830,10 +883,10 @@ func (ui *App) refreshReview() {
 		ui.emptyIcon.Show()
 		switch {
 		case !ui.sorter.HasFolder():
-			ui.placeholder.Text = "Open a folder of PDFs to begin sorting."
+			ui.placeholder.Text = ui.openFolderHint("sorting")
 			ui.emptyIcon.Resource = theme.NewColoredResource(theme.FolderOpenIcon(), theme.ColorNamePlaceHolder)
 		case ui.sorter.TotalStarted == 0:
-			ui.placeholder.Text = "No PDFs in this folder."
+			ui.placeholder.Text = ui.emptyFolderHint()
 			ui.emptyIcon.Resource = theme.NewColoredResource(theme.DocumentIcon(), theme.ColorNamePlaceHolder)
 		default:
 			ui.placeholder.Text = "Queue empty — all assigned or skipped."
@@ -1003,9 +1056,9 @@ func (ui *App) updateSwipeEmptyHint(cardCount int) {
 	}
 	switch {
 	case !ui.sorter.HasFolder():
-		ui.swipeBoard.emptyHint.SetText("Open a folder of PDFs to begin swiping.")
+		ui.swipeBoard.emptyHint.SetText(ui.openFolderHint("swiping"))
 	case ui.sorter.TotalStarted == 0:
-		ui.swipeBoard.emptyHint.SetText("No PDFs in this folder.")
+		ui.swipeBoard.emptyHint.SetText(ui.emptyFolderHint())
 	default:
 		ui.swipeBoard.emptyHint.SetText("Queue empty — all assigned or skipped.")
 	}

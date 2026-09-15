@@ -2,6 +2,8 @@ package preview
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -281,6 +283,41 @@ func TestRenderPagesCorruptPDFErrors(t *testing.T) {
 	_, err := RenderPages(path, 120, 3)
 	if err == nil {
 		t.Fatal("expected error for a non-PDF file")
+	}
+}
+
+func TestRenderPagesImageDoesNotNeedPdftoppm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dot.png")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	pages, err := RenderPages(path, 120, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 || pages[0].Bounds().Dx() != 1 || pages[0].Bounds().Dy() != 1 {
+		t.Fatalf("png preview = %d pages, bounds %v", len(pages), pages[0].Bounds())
+	}
+}
+
+func TestRenderPagesTextHasNoPreview(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RenderPages(path, 120, 1)
+	if err == nil {
+		t.Fatal("expected no preview for a text file")
 	}
 }
 
