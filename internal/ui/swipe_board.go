@@ -65,7 +65,7 @@ func newSwipeBoard(onCapacity func(n, cols int)) *swipeBoard {
 		capacity:   1,
 		cellSize:   fyne.NewSize(swipeCardMinW, swipeCardMinH),
 	}
-	b.emptyHint = widget.NewLabel("Open a folder, pick left & right categories,\nthen drag cards: ← left · → right · ↓ skip")
+	b.emptyHint = widget.NewLabel("Open a folder, pick left & right categories,\nthen drag cards.")
 	b.emptyHint.Alignment = fyne.TextAlignCenter
 	b.emptyHint.Wrapping = fyne.TextWrapWord
 	b.emptyHint.Importance = widget.LowImportance

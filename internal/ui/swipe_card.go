@@ -53,12 +53,13 @@ type swipeCard struct {
 	bg      *canvas.Rectangle
 	border  *canvas.Rectangle
 	// Decision overlay: full-card wash + large center badge (icon + label).
-	overlay  *canvas.Rectangle
-	badgeBg  *canvas.Rectangle
-	badge    *canvas.Text
-	dragX    float32
-	dragY    float32
-	dragging bool
+	overlay    *canvas.Rectangle
+	badgeBg    *canvas.Rectangle
+	badgeGlyph *canvas.Text
+	badge      *canvas.Text
+	dragX      float32
+	dragY      float32
+	dragging   bool
 	// previewDir is the direction currently shown on the overlay (may be a
 	// soft preview below the commit threshold).
 	previewDir swipeDir
@@ -116,7 +117,10 @@ func newSwipeCard(path string, onSwipe func(string, swipeDir)) *swipeCard {
 	c.badgeBg.CornerRadius = 999
 	c.badgeBg.Hide()
 
-	c.badge = canvas.NewText("", color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF})
+	white := color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	c.badgeGlyph = symbolText("", white, 22)
+	c.badgeGlyph.Hide()
+	c.badge = canvas.NewText("", white)
 	c.badge.TextSize = 22
 	c.badge.Alignment = fyne.TextAlignCenter
 	c.badge.TextStyle = fyne.TextStyle{Bold: true}
@@ -168,7 +172,7 @@ func (c *swipeCard) SetMinCardSize(sz fyne.Size) {
 func (c *swipeCard) CreateRenderer() fyne.WidgetRenderer {
 	// Paint order: face → thumb → title → wash → border → badge (top).
 	return &swipeCardRenderer{card: c, objects: []fyne.CanvasObject{
-		c.bg, c.thumb, c.nameLbl, c.overlay, c.border, c.badgeBg, c.badge,
+		c.bg, c.thumb, c.nameLbl, c.overlay, c.border, c.badgeBg, c.badgeGlyph, c.badge,
 	}}
 }
 
@@ -344,15 +348,21 @@ func (c *swipeCard) applyDragVisual() {
 	// Badge: solid accent pill, white label — the primary decision readout.
 	c.badgeBg.FillColor = withAlpha(accent, uint8(200+c.dragProgress*55))
 	c.badgeBg.Show()
-	c.badge.Text = glyph + "  " + label
-	c.badge.Color = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
-	// Scale type slightly with progress so commit feels "locked in".
-	c.badge.TextSize = 18 + c.dragProgress*6
+	white := color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	size := 18 + c.dragProgress*6
+	c.badgeGlyph.Text = glyph
+	c.badgeGlyph.Color = white
+	c.badgeGlyph.TextSize = size
+	c.badgeGlyph.Show()
+	c.badge.Text = label
+	c.badge.Color = white
+	c.badge.TextSize = size
 	c.badge.Show()
 
 	c.overlay.Refresh()
 	c.border.Refresh()
 	c.badgeBg.Refresh()
+	c.badgeGlyph.Refresh()
 	c.badge.Refresh()
 }
 
@@ -383,12 +393,15 @@ func (c *swipeCard) overlayStyle(dir swipeDir) (accent color.NRGBA, label, glyph
 func (c *swipeCard) hideOverlay() {
 	c.overlay.Hide()
 	c.badgeBg.Hide()
+	c.badgeGlyph.Hide()
+	c.badgeGlyph.Text = ""
 	c.badge.Hide()
 	c.badge.Text = ""
 	c.border.StrokeColor = color.Transparent
 	c.border.StrokeWidth = 4
 	c.overlay.Refresh()
 	c.badgeBg.Refresh()
+	c.badgeGlyph.Refresh()
 	c.badge.Refresh()
 	c.border.Refresh()
 }
@@ -476,10 +489,9 @@ func (c *swipeCard) layoutFace(size fyne.Size) {
 	// per drag, unlike position which changes every frame.
 	if c.badge.Visible() && c.previewDir != swipeNone {
 		if c.previewDir != c.badgeCacheDir || badgeW != c.badgeCacheW {
-			_, label, glyph := c.overlayStyle(c.previewDir)
-			full := glyph + "  " + label
-			// Budget ~badge interior width.
-			c.badgeCacheText = ellipsizeToWidth(full, badgeW-20, c.badge.TextSize, c.badge.TextStyle)
+			_, label, _ := c.overlayStyle(c.previewDir)
+			glyphW := fyne.MeasureText(c.badgeGlyph.Text, c.badgeGlyph.TextSize, c.badgeGlyph.TextStyle).Width
+			c.badgeCacheText = ellipsizeToWidth(label, badgeW-24-glyphW, c.badge.TextSize, c.badge.TextStyle)
 			c.badgeCacheDir = c.previewDir
 			c.badgeCacheW = badgeW
 		}
@@ -489,8 +501,19 @@ func (c *swipeCard) layoutFace(size fyne.Size) {
 	by := oy + (size.Height-badgeH)/2
 	c.badgeBg.Resize(fyne.NewSize(badgeW, badgeH))
 	c.badgeBg.Move(fyne.NewPos(bx, by))
-	c.badge.Resize(fyne.NewSize(badgeW, badgeH))
-	c.badge.Move(fyne.NewPos(bx, by))
+	gap := float32(8)
+	gw := fyne.MeasureText(c.badgeGlyph.Text, c.badgeGlyph.TextSize, c.badgeGlyph.TextStyle).Width
+	lw := fyne.MeasureText(c.badge.Text, c.badge.TextSize, c.badge.TextStyle).Width
+	if c.badge.Text == "" {
+		lw = 0
+		gap = 0
+	}
+	total := gw + gap + lw
+	start := bx + (badgeW-total)/2
+	c.badgeGlyph.Resize(fyne.NewSize(gw+2, badgeH))
+	c.badgeGlyph.Move(fyne.NewPos(start, by))
+	c.badge.Resize(fyne.NewSize(lw+2, badgeH))
+	c.badge.Move(fyne.NewPos(start+gw+gap, by))
 }
 
 // ellipsizeToWidth shortens s with a trailing ellipsis so its measured width
@@ -545,5 +568,6 @@ func (r *swipeCardRenderer) Refresh() {
 	r.card.overlay.Refresh()
 	r.card.border.Refresh()
 	r.card.badgeBg.Refresh()
+	r.card.badgeGlyph.Refresh()
 	r.card.badge.Refresh()
 }

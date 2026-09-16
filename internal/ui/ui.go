@@ -93,7 +93,7 @@ type App struct {
 	swipeProgress    *widget.Label
 	swipeStatus      *widget.Label
 	swipeUndoBtn     *widget.Button
-	swipeHint        *widget.Label
+	swipeHint        fyne.CanvasObject
 
 	// swipeCardByPath lets async thumbnail renders land on the right card
 	// after a refill; cleared/replaced each rebuild.
@@ -312,10 +312,7 @@ func (ui *App) buildSwipePane(pal palette) fyne.CanvasObject {
 	})
 	ui.swipeRightSelect.PlaceHolder = "Right category"
 
-	ui.swipeHint = widget.NewLabel("← left   ·   ↓ skip   ·   right →")
-	ui.swipeHint.Alignment = fyne.TextAlignCenter
-	ui.swipeHint.SizeName = theme.SizeNameCaptionText
-	ui.swipeHint.Importance = widget.LowImportance
+	ui.swipeHint = swipeActionHint(pal.muted)
 
 	ui.swipeProgress = widget.NewLabel("0 / 0")
 	ui.swipeProgress.Alignment = fyne.TextAlignCenter
@@ -328,12 +325,8 @@ func (ui *App) buildSwipePane(pal palette) fyne.CanvasObject {
 	)
 
 	// Direction-colored selectors match card drag feedback (left rose / right sage).
-	leftArrow := canvas.NewText("←", swipeLeftAccent)
-	leftArrow.TextStyle = fyne.TextStyle{Bold: true}
-	leftArrow.TextSize = 16
-	rightArrow := canvas.NewText("→", swipeRightAccent)
-	rightArrow.TextStyle = fyne.TextStyle{Bold: true}
-	rightArrow.TextSize = 16
+	leftArrow := symbolText("←", swipeLeftAccent, 16)
+	rightArrow := symbolText("→", swipeRightAccent, 16)
 
 	pickerRow := container.NewBorder(nil, nil,
 		container.NewHBox(leftArrow, tintedSelect(ui.swipeLeftSelect, swipeLeftAccent)),

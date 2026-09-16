@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
@@ -973,6 +974,40 @@ func TestSwipeCapacityGrowsWithWindow(t *testing.T) {
 	capped, _ := swipeCapacity(fyne.NewSize(4000, 4000))
 	if capped > swipeMaxCards {
 		t.Errorf("capacity %d exceeds cap %d", capped, swipeMaxCards)
+	}
+}
+
+func TestSwipeActionTipsUseSymbolFont(t *testing.T) {
+	ui := newTestApp(t)
+	got := map[string]bool{}
+	var walk func(fyne.CanvasObject)
+	walk = func(o fyne.CanvasObject) {
+		switch n := o.(type) {
+		case *canvas.Text:
+			if n.TextStyle.Symbol {
+				got[n.Text] = true
+			}
+		case *fyne.Container:
+			for _, c := range n.Objects {
+				walk(c)
+			}
+		}
+	}
+	walk(ui.swipeHint)
+	for _, want := range []string{"←", "↓", "→"} {
+		if !got[want] {
+			t.Errorf("swipe hint missing symbol %q (got %v)", want, got)
+		}
+	}
+	_, _, left := newSwipeCard("/tmp/a.pdf", nil).overlayStyle(swipeLeft)
+	_, _, right := newSwipeCard("/tmp/a.pdf", nil).overlayStyle(swipeRight)
+	_, _, down := newSwipeCard("/tmp/a.pdf", nil).overlayStyle(swipeDown)
+	if left != "←" || right != "→" || down != "↓" {
+		t.Errorf("overlay glyphs = %q %q %q", left, right, down)
+	}
+	c := newSwipeCard("/tmp/a.pdf", nil)
+	if !c.badgeGlyph.TextStyle.Symbol {
+		t.Error("overlay arrow must use the bundled symbol face")
 	}
 }
 
