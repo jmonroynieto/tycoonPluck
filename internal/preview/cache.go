@@ -10,6 +10,7 @@ import (
 // modest lookahead of upcoming queue items without unbounded RAM growth.
 const (
 	DefaultCacheMaxEntries = 48
+	DefaultCacheMaxBytes   = 256 << 20
 	DefaultCacheWorkers    = 2
 	// SwipeThumbDPI is the resolution used for swipe-board first-page thumbs.
 	SwipeThumbDPI = 72
@@ -30,13 +31,15 @@ const (
 // Cancellation is cooperative through context: dropping interest cancels
 // pdftoppm; completed results for unwanted keys are discarded (not stored).
 type Cache struct {
-	mu       sync.Mutex
-	maxSize  int
-	workers  chan struct{} // semaphore for concurrent pdftoppm
-	entries  map[cacheKey]*cacheEntry
-	lru      []cacheKey // oldest at head
-	inflight map[cacheKey]*inflightRender
-	wanted   map[cacheKey]struct{}
+	mu        sync.Mutex
+	maxSize   int
+	maxBytes  int64
+	usedBytes int64
+	workers   chan struct{} // semaphore for concurrent pdftoppm
+	entries   map[cacheKey]*cacheEntry
+	lru       []cacheKey // oldest at head
+	inflight  map[cacheKey]*inflightRender
+	wanted    map[cacheKey]struct{}
 }
 
 type cacheKey struct {
@@ -47,6 +50,7 @@ type cacheKey struct {
 
 type cacheEntry struct {
 	pages []image.Image
+	bytes int64
 }
 
 type inflightRender struct {
@@ -69,6 +73,16 @@ func WithMaxEntries(n int) CacheOption {
 	}
 }
 
+// WithMaxBytes sets the decoded-image memory budget (minimum 1 byte).
+func WithMaxBytes(n int64) CacheOption {
+	return func(c *Cache) {
+		if n < 1 {
+			n = 1
+		}
+		c.maxBytes = n
+	}
+}
+
 // WithWorkers sets max concurrent pdftoppm jobs (minimum 1).
 func WithWorkers(n int) CacheOption {
 	return func(c *Cache) {
@@ -83,6 +97,7 @@ func WithWorkers(n int) CacheOption {
 func NewCache(opts ...CacheOption) *Cache {
 	c := &Cache{
 		maxSize:  DefaultCacheMaxEntries,
+		maxBytes: DefaultCacheMaxBytes,
 		workers:  make(chan struct{}, DefaultCacheWorkers),
 		entries:  make(map[cacheKey]*cacheEntry),
 		inflight: make(map[cacheKey]*inflightRender),
@@ -295,6 +310,7 @@ func (c *Cache) Drop(path string) {
 	}
 	for k := range c.entries {
 		if k.path == path {
+			c.usedBytes -= c.entries[k].bytes
 			delete(c.entries, k)
 			c.removeLRULocked(k)
 		}
@@ -318,6 +334,7 @@ func (c *Cache) Clear() {
 	}
 	c.entries = make(map[cacheKey]*cacheEntry)
 	c.lru = nil
+	c.usedBytes = 0
 	c.inflight = make(map[cacheKey]*inflightRender)
 	c.wanted = make(map[cacheKey]struct{})
 }
@@ -379,18 +396,47 @@ func (c *Cache) storeLocked(k cacheKey, pages []image.Image) {
 	// Keep our own slice so callers of GetPages cannot mutate the entry.
 	stored := make([]image.Image, len(pages))
 	copy(stored, pages)
-	if _, ok := c.entries[k]; ok {
-		c.entries[k] = &cacheEntry{pages: stored}
+	bytes := pageBytes(stored)
+	// One oversized document should still display, but must not evict the
+	// entire useful cache just to be retained.
+	if bytes > c.maxBytes {
+		return
+	}
+	if old, ok := c.entries[k]; ok {
+		c.usedBytes -= old.bytes
+		c.entries[k] = &cacheEntry{pages: stored, bytes: bytes}
+		c.usedBytes += bytes
 		c.touchLocked(k)
 		return
 	}
-	c.entries[k] = &cacheEntry{pages: stored}
+	c.entries[k] = &cacheEntry{pages: stored, bytes: bytes}
+	c.usedBytes += bytes
 	c.lru = append(c.lru, k)
-	for len(c.entries) > c.maxSize {
+	for len(c.entries) > c.maxSize || c.usedBytes > c.maxBytes {
 		oldest := c.lru[0]
 		c.lru = c.lru[1:]
+		c.usedBytes -= c.entries[oldest].bytes
 		delete(c.entries, oldest)
 	}
+}
+
+func pageBytes(pages []image.Image) int64 {
+	var total int64
+	for _, page := range pages {
+		if page == nil {
+			continue
+		}
+		bounds := page.Bounds()
+		w, h := int64(bounds.Dx()), int64(bounds.Dy())
+		if w <= 0 || h <= 0 || w > (1<<62)/h/4 {
+			return 1 << 62
+		}
+		total += w * h * 4
+		if total < 0 {
+			return 1 << 62
+		}
+	}
+	return total
 }
 
 func (c *Cache) touchLocked(k cacheKey) {

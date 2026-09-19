@@ -48,6 +48,7 @@ type App struct {
 	statusLabel   *widget.Label
 	outputHint    *widget.Label
 	placeholder   *canvas.Text
+	emptyOpenBtn  *widget.Button
 	emptyIcon     *canvas.Image
 	previewImg    *canvas.Image
 	previewStack  *fyne.Container
@@ -66,6 +67,9 @@ type App struct {
 
 	previewMu  sync.Mutex
 	previewGen uint64
+	// reviewPreviewPath avoids re-registering callbacks and flashing the
+	// placeholder when a refresh does not actually change the current file.
+	reviewPreviewPath string
 	// previewWG tracks in-flight preview renders so tests can deterministically
 	// wait for one to finish (see waitForPreview) instead of racing it.
 	previewWG sync.WaitGroup
@@ -101,10 +105,16 @@ type App struct {
 	swipeMu         sync.Mutex
 	swipeGen        uint64
 	swipeWG         sync.WaitGroup
+	swipeSignature  string
 
 	// thumbs caches swipe first-page rasters and prefetches upcoming queue
 	// items; Want() halts work that is no longer interesting.
 	thumbs *preview.Cache
+
+	// folderLoading keeps filesystem scans away from the event thread. While a
+	// replacement queue is being prepared, triage controls are disabled so a
+	// decision cannot race the incoming queue.
+	folderLoading bool
 }
 
 // New builds the main window (not yet shown).
@@ -166,9 +176,12 @@ func (ui *App) build() {
 	ui.placeholder.Alignment = fyne.TextAlignCenter
 	ui.placeholder.TextSize = 16
 
+	ui.emptyOpenBtn = widget.NewButton("Open a folder…", ui.onOpenFolder)
+	ui.emptyOpenBtn.Importance = widget.LowImportance
 	emptyState := container.NewCenter(container.New(layout.NewCustomPaddedVBoxLayout(10),
 		container.NewCenter(ui.emptyIcon),
 		ui.placeholder,
+		ui.emptyOpenBtn,
 	))
 
 	ui.previewImg = canvas.NewImageFromImage(image.NewRGBA(image.Rect(0, 0, 1, 1)))
@@ -217,14 +230,12 @@ func (ui *App) build() {
 	addBtn := widget.NewButtonWithIcon("Add category", theme.ContentAddIcon(), ui.onAddCategory)
 	addBtn.Alignment = widget.ButtonAlignLeading
 
-	sidebarTop := container.New(layout.NewCustomPaddedVBoxLayout(14),
-		sectionLabel,
-		ui.categoryBox,
-		addBtn,
-	)
+	// The category list may be much longer than the window. Scroll only that
+	// list so Add category and the format/output controls stay reachable.
+	categoryScroll := container.NewVScroll(ui.categoryBox)
 	ui.expandedCheck = widget.NewCheck("Expanded formats", ui.onExpandedCheck)
-	sidebarBottom := container.NewVBox(ui.expandedCheck, ui.outputHint)
-	sidebarBody := container.NewBorder(sidebarTop, sidebarBottom, nil, nil, layout.NewSpacer())
+	sidebarBottom := container.NewVBox(addBtn, ui.expandedCheck, ui.outputHint)
+	sidebarBody := container.NewBorder(sectionLabel, sidebarBottom, nil, nil, categoryScroll)
 	sidebar := container.NewBorder(nil, nil, nil,
 		hairline(pal),
 		container.NewStack(
@@ -254,9 +265,8 @@ func (ui *App) build() {
 	ui.swipePane.Hide()
 
 	// --- header -------------------------------------------------------------
-	// Single-line lockup (title + subtitle side by side, not stacked) and a
-	// smaller title size — this is app chrome framing the preview, not a
-	// hero headline, so it shouldn't compete with it for vertical space.
+	// A compact two-line lockup gives the application name clear hierarchy and
+	// keeps the mode controls aligned as one action group on the right.
 	title := widget.NewLabel("tycoonPluck")
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.SizeName = theme.SizeNameSubHeadingText
@@ -272,7 +282,7 @@ func (ui *App) build() {
 	subtitle.SizeName = theme.SizeNameCaptionText
 	subtitle.Importance = widget.LowImportance
 
-	titleBlock := container.New(layout.NewCustomPaddedHBoxLayout(8), nameBlock, subtitle)
+	titleBlock := container.New(layout.NewCustomPaddedVBoxLayout(1), nameBlock, subtitle)
 
 	// Centered mode toggle: Review (classic) ↔ Swipe (quick match).
 	ui.modeReviewBtn = widget.NewButton("Review", func() { ui.setMode(modeReview) })
@@ -281,7 +291,8 @@ func (ui *App) build() {
 	ui.modeSwipeBtn.Importance = widget.MediumImportance
 	modeToggle := container.NewHBox(ui.modeReviewBtn, ui.modeSwipeBtn)
 
-	headerRow := container.NewBorder(nil, nil, titleBlock, ui.openBtn, container.NewCenter(modeToggle))
+	headerActions := container.NewHBox(modeToggle, ui.openBtn)
+	headerRow := container.NewBorder(nil, nil, titleBlock, nil, container.NewCenter(headerActions))
 	header := container.NewBorder(nil,
 		hairline(pal),
 		nil, nil,
@@ -291,6 +302,9 @@ func (ui *App) build() {
 	body := container.NewHSplit(sidebar, mainStack)
 	body.SetOffset(0.24)
 
+	ui.win.SetMainMenu(fyne.NewMainMenu(
+		fyne.NewMenu("File", fyne.NewMenuItemWithIcon("Open folder…", theme.FolderOpenIcon(), ui.onOpenFolder)),
+	))
 	ui.win.SetContent(container.NewBorder(header, nil, nil, nil, body))
 }
 
@@ -367,12 +381,18 @@ func (ui *App) setMode(m workMode) {
 	ui.mode = m
 	switch m {
 	case modeSwipe:
+		if ui.thumbs != nil {
+			ui.thumbs.Want(nil, preview.ReviewPreviewDPI, preview.ReviewMaxPages)
+		}
 		ui.modeReviewBtn.Importance = widget.MediumImportance
 		ui.modeSwipeBtn.Importance = widget.HighImportance
 		ui.reviewPane.Hide()
 		ui.swipePane.Show()
 		ui.syncSwipeCategorySelects()
 	default:
+		if ui.thumbs != nil {
+			ui.thumbs.Want(nil, preview.SwipeThumbDPI, 1)
+		}
 		ui.modeReviewBtn.Importance = widget.HighImportance
 		ui.modeSwipeBtn.Importance = widget.MediumImportance
 		ui.swipePane.Hide()
@@ -514,19 +534,29 @@ func (ui *App) onOpenFolder() {
 		}
 		// Folder picker lists directories only (by design): pick the folder that
 		// contains the PDFs at its top level — not individual files.
-		n, err := ui.sorter.OpenFolder(uri.Path())
-		if err != nil {
-			dialog.ShowError(err, ui.win)
-			return
-		}
-		// New folder → drop any thumbs from a previous session.
-		if ui.thumbs != nil {
-			ui.thumbs.Clear()
-		}
-		ui.applySessionForOpenFolder()
-		ui.setStatus(ui.loadedStatus())
-		_ = n
+		path, expanded := uri.Path(), ui.sorter.Expanded
+		ui.folderLoading = true
+		ui.setStatus("Scanning folder…")
 		ui.refresh()
+		go func() {
+			next := sorter.Sorter{Expanded: expanded}
+			_, scanErr := next.OpenFolder(path)
+			fyne.Do(func() {
+				ui.folderLoading = false
+				if scanErr != nil {
+					dialog.ShowError(scanErr, ui.win)
+					ui.refresh()
+					return
+				}
+				ui.sorter = next
+				if ui.thumbs != nil {
+					ui.thumbs.Clear()
+				}
+				ui.applySessionForOpenFolder()
+				ui.setStatus(ui.loadedStatus())
+				ui.refresh()
+			})
+		}()
 	}, ui.win)
 	// Fyne 2.8 FileDialog: Resize before Show panics — MinSize touches a nil
 	// internal dialog. Show first (builds the body), then Resize.
@@ -546,11 +576,11 @@ func (ui *App) applySessionForOpenFolder() {
 }
 
 func (ui *App) onExpandedCheck(on bool) {
-	if ui.sorter.Expanded == on {
+	if ui.folderLoading || ui.sorter.Expanded == on {
 		return
 	}
-	ui.sorter.Expanded = on
 	if !ui.sorter.HasFolder() {
+		ui.sorter.Expanded = on
 		ui.refresh()
 		return
 	}
@@ -558,12 +588,26 @@ func (ui *App) onExpandedCheck(on bool) {
 	if ui.journal != nil {
 		skip = ui.journal.SkippedSet(ui.sorter.SourceDir)
 	}
-	if err := ui.sorter.Rescan(skip); err != nil {
-		dialog.ShowError(err, ui.win)
-		return
-	}
-	ui.setStatus(ui.loadedStatus())
+	ui.folderLoading = true
+	ui.setStatus("Rescanning formats…")
 	ui.refresh()
+	base := ui.sorter
+	go func() {
+		next := base
+		next.Expanded = on
+		scanErr := next.Rescan(skip)
+		fyne.Do(func() {
+			ui.folderLoading = false
+			if scanErr != nil {
+				dialog.ShowError(scanErr, ui.win)
+				ui.refresh()
+				return
+			}
+			ui.sorter = next
+			ui.setStatus(ui.loadedStatus())
+			ui.refresh()
+		})
+	}()
 }
 
 func (ui *App) loadedStatus() string {
@@ -667,7 +711,7 @@ func (ui *App) assign(category string) {
 
 // assignPath moves a specific queued PDF into category (review or swipe).
 func (ui *App) assignPath(path, category string) {
-	if path == "" {
+	if ui.folderLoading || path == "" {
 		return
 	}
 	if len(ui.cats) == 0 {
@@ -702,6 +746,9 @@ func (ui *App) assignPath(path, category string) {
 
 // skipPath drops a specific queued PDF from the session (swipe ↓).
 func (ui *App) skipPath(path string) {
+	if ui.folderLoading {
+		return
+	}
 	skipped := ui.sorter.SkipPath(path)
 	if skipped == "" {
 		return
@@ -731,6 +778,9 @@ func (ui *App) onInspect() {
 }
 
 func (ui *App) onSkip() {
+	if ui.folderLoading {
+		return
+	}
 	skipped := ui.sorter.Skip()
 	if skipped == "" {
 		return
@@ -743,6 +793,9 @@ func (ui *App) onSkip() {
 }
 
 func (ui *App) onUndo() {
+	if ui.folderLoading {
+		return
+	}
 	restored, err := ui.sorter.Undo()
 	if err != nil {
 		dialog.ShowError(err, ui.win)
@@ -762,7 +815,7 @@ func (ui *App) onUndo() {
 }
 
 func (ui *App) onKey(ev *fyne.KeyEvent) {
-	if ui.modalOpen {
+	if ui.modalOpen || ui.folderLoading {
 		return
 	}
 	// Undo is shared across modes.
@@ -816,6 +869,25 @@ func (ui *App) onSwipeKey(ev *fyne.KeyEvent) {
 }
 
 func (ui *App) refresh() {
+	if ui.folderLoading {
+		ui.openBtn.Disable()
+	} else {
+		ui.openBtn.Enable()
+	}
+	if ui.expandedCheck != nil {
+		if ui.folderLoading {
+			ui.expandedCheck.Disable()
+		} else {
+			ui.expandedCheck.Enable()
+		}
+	}
+	if ui.emptyOpenBtn != nil {
+		if ui.folderLoading {
+			ui.emptyOpenBtn.Disable()
+		} else {
+			ui.emptyOpenBtn.Enable()
+		}
+	}
 	if ui.sorter.HasFolder() {
 		ui.outputHint.SetText("Output: subfolders in\n" + ui.sorter.SourceDir)
 	} else {
@@ -830,7 +902,7 @@ func (ui *App) refresh() {
 }
 
 func (ui *App) refreshReview() {
-	hasCurrent := ui.sorter.Current() != ""
+	hasCurrent := ui.sorter.Current() != "" && !ui.folderLoading
 	canAssign := hasCurrent && len(ui.cats) > 0
 	for _, obj := range ui.categoryBox.Objects {
 		if row, ok := obj.(*categoryRow); ok {
@@ -850,7 +922,7 @@ func (ui *App) refreshReview() {
 		ui.inspectBtn.Disable()
 		ui.inspectBtn.SetText("Open PDF")
 	}
-	if ui.sorter.CanUndo() {
+	if ui.sorter.CanUndo() && !ui.folderLoading {
 		ui.undoBtn.Enable()
 	} else {
 		ui.undoBtn.Disable()
@@ -863,6 +935,7 @@ func (ui *App) refreshReview() {
 		// Invalidate any in-flight preview so it cannot touch widgets after teardown.
 		ui.previewMu.Lock()
 		ui.previewGen++
+		ui.reviewPreviewPath = ""
 		ui.previewMu.Unlock()
 		// Halt review-kind prefetch; leave swipe-kind interest alone.
 		if ui.thumbs != nil {
@@ -871,6 +944,7 @@ func (ui *App) refreshReview() {
 
 		ui.filenameLabel.SetText("")
 		ui.previewImg.Hide()
+		ui.emptyOpenBtn.Show()
 		ui.hidePager()
 		ui.placeholder.Show()
 		ui.emptyIcon.Show()
@@ -892,6 +966,7 @@ func (ui *App) refreshReview() {
 	}
 
 	ui.filenameLabel.SetText(filepath.Base(current))
+	ui.emptyOpenBtn.Hide()
 	// Prefetch current + next queue items at review resolution while we paint.
 	ui.prefetchReviewPreviews()
 	ui.showPreview(current)
@@ -936,6 +1011,11 @@ func (ui *App) syncSwipeBoard() {
 		return
 	}
 	capN := ui.swipeBoard.Capacity()
+	if key := ui.swipeBoardKey(capN); key == ui.swipeSignature {
+		return
+	} else {
+		ui.swipeSignature = key
+	}
 
 	// Keep cards that still refer to a queued path; drop the rest.
 	queued := make(map[string]struct{}, ui.sorter.Remaining())
@@ -993,6 +1073,7 @@ func (ui *App) replaceSwipeSlot(oldPath string) {
 	if ui.swipeBoard == nil {
 		return
 	}
+	ui.swipeSignature = ""
 	ui.swipeMu.Lock()
 	card := ui.swipeCardByPath[oldPath]
 	if card == nil {
@@ -1021,6 +1102,30 @@ func (ui *App) replaceSwipeSlot(oldPath string) {
 	// Do not bump swipeGen — other cards' in-flight thumbs must still land.
 	// Prefer cache hit (often already prefetched) before spawning work.
 	ui.loadSwipeThumb(next, 0)
+}
+
+// swipeBoardKey contains only the paths that can affect visible cards or the
+// thumbnail lookahead. It lets ordinary chrome refreshes skip map rebuilds
+// and full board refreshes.
+func (ui *App) swipeBoardKey(capN int) string {
+	lookahead := capN * 2
+	if lookahead < 4 {
+		lookahead = 4
+	}
+	if lookahead > 16 {
+		lookahead = 16
+	}
+	n := capN + lookahead
+	if n > len(ui.sorter.Queue) {
+		n = len(ui.sorter.Queue)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d|", capN)
+	for _, path := range ui.sorter.Queue[:n] {
+		b.WriteString(path)
+		b.WriteByte('\x00')
+	}
+	return b.String()
 }
 
 // nextPathNotOnBoard returns the first queued PDF not already shown as a card.
@@ -1205,6 +1310,11 @@ func (ui *App) prefetchReviewPreviews() {
 
 func (ui *App) showPreview(pdfPath string) {
 	ui.previewMu.Lock()
+	if ui.reviewPreviewPath == pdfPath {
+		ui.previewMu.Unlock()
+		return
+	}
+	ui.reviewPreviewPath = pdfPath
 	ui.previewGen++
 	gen := ui.previewGen
 	ui.previewMu.Unlock()

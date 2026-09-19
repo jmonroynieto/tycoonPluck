@@ -391,6 +391,9 @@ func (c *swipeCard) overlayStyle(dir swipeDir) (accent color.NRGBA, label, glyph
 }
 
 func (c *swipeCard) hideOverlay() {
+	if !c.overlay.Visible() && !c.badgeBg.Visible() && !c.badgeGlyph.Visible() && !c.badge.Visible() && c.border.StrokeColor == color.Transparent {
+		return
+	}
 	c.overlay.Hide()
 	c.badgeBg.Hide()
 	c.badgeGlyph.Hide()
