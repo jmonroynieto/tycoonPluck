@@ -1,15 +1,13 @@
 # tycoonPluck
 
-**v0 (tester candidate)** — PDF category sorter for **Manjaro XFCE on X11**.
+A desktop PDF sorter for **Manjaro XFCE on X11**. Open a folder, preview each file, assign it to a category (or skip it), and the file is moved into that category’s subfolder. Categories are yours to define; nothing is preloaded.
 
-Open a folder of PDFs → categories as buttons on the left → first-page preview → click a category (or press a key) → file is **moved** into that subfolder → next PDF.
+Two sorting modes share the same queue and categories:
 
-| Doc | What it is |
-|-----|------------|
-| **This README** | Install, build, run, test, tester notes |
-| **[plan.md](./plan.md)** | Full design, history, architecture, v0 scope |
+- **Review** — one file at a time, with a multi-page preview and category buttons
+- **Swipe** — a card board for quicker left / right / down assigns
 
-Wayland is **not** supported in v0. Always build with the **`x11`** tag (or use `make`).
+Wayland is not supported. Always build with the `x11` tag (or use `make`).
 
 ---
 
@@ -22,204 +20,171 @@ sudo pacman -S go gcc pkgconf poppler
 | Package | Why |
 |---------|-----|
 | `go`, `gcc`, `pkgconf` | Compile Fyne (CGO + GLFW) |
-| `poppler` | Provides `pdftoppm` for first-page previews |
+| `poppler` | `pdftoppm` for first-page previews |
 | X11 + OpenGL | Normal XFCE desktop already has these |
-| `librsvg` (`rsvg-convert`) | Only needed for `make install`/`make icons` — rasterizes the app icon |
+| `librsvg` (`rsvg-convert`) | Only for `make install` / `make icons` |
 
-Confirm session type:
+Confirm the session is X11:
 
 ```bash
 echo "$XDG_SESSION_TYPE"   # should print: x11
 ```
 
----
-
-## Build & run
-
-From this directory (`tycoonPluck/`):
-
-```bash
-make run                 # preferred: go run -tags x11 .
-# or
-make build && ./tycoonPluck
-# or
-go run -tags x11 .
-go build -tags x11 -o tycoonPluck .
-```
-
-**Do not** use plain `go build` / `go run` without `-tags x11` — GLFW will try to include Wayland and may fail or link the wrong backend.
-
-First build downloads modules (needs network) and compiles GLFW.
-
-### Preview dependency
-
-If the app says it cannot preview and mentions `pdftoppm`:
+If previews are missing and the app mentions `pdftoppm`:
 
 ```bash
 sudo pacman -S poppler
 which pdftoppm
 ```
 
-Sorting (move/skip/undo) still works without previews; you just will not see page thumbnails.
+Sorting still works without previews; you just will not see page thumbnails.
 
 ---
 
-## Install (XFCE app menu, icon, launcher)
+## Build and run
+
+From this directory:
+
+```bash
+make run                 # preferred: go run -tags x11 .
+# or
+make build && ./tycoonPluck
+```
+
+Do not use plain `go build` / `go run` without `-tags x11` — GLFW may try to include Wayland and link the wrong backend. First build downloads modules (needs network) and compiles GLFW.
+
+For editor / direct `go` commands that need the local module workspace:
+
+```bash
+make workspace
+go run -tags x11 .
+```
+
+---
+
+## Install (XFCE app menu)
 
 ```bash
 sudo pacman -S librsvg   # if you don't already have rsvg-convert
 make install
 ```
 
-This is a **user-local** install — nothing is written outside `~/.local`, no `sudo` needed for `make install` itself:
+`make install` itself needs no `sudo`. It writes only under `~/.local`:
 
-| Installed to | What |
-|---|---|
-| `~/.local/bin/tycoonPluck` | The built binary |
-| `~/.local/share/applications/com.local.tycoonpluck.desktop` | App launcher entry |
-| `~/.local/share/icons/hicolor/**/apps/com.local.tycoonpluck.{png,svg}` | Icon, all standard sizes + scalable |
+| Path | What |
+|------|------|
+| `~/.local/bin/tycoonPluck` | Binary |
+| `~/.local/share/applications/com.local.tycoonpluck.desktop` | Launcher |
+| `~/.local/share/icons/hicolor/**/apps/com.local.tycoonpluck.{png,svg}` | Icon set |
 
-After `make install`, tycoonPluck shows up in the XFCE app menu (Whisker Menu, under *Office*) with its icon — no logout required; the install target refreshes the desktop and icon caches for you. `~/.local/bin` must be on your `PATH` (it is by default on most Manjaro XFCE installs).
-
-To remove everything the installer wrote:
+After install, the app appears in the XFCE menu (Whisker Menu, under *Office*). `~/.local/bin` must be on your `PATH`. To remove what the installer wrote:
 
 ```bash
 make uninstall
 ```
 
-Other packaging targets:
-
 | Target | Does |
-|---|---|
-| `make icons` | Regenerates `packaging/icons/*.png` from the scalable SVG (needs `rsvg-convert`) |
-| `make install` | `build` + `icons`, then installs binary/desktop entry/icons and refreshes caches |
+|--------|------|
+| `make icons` | Regenerates `packaging/icons/*.png` from the SVG |
+| `make install` | Build + icons, then install binary / desktop entry / icons |
 | `make uninstall` | Removes everything `make install` wrote |
-| `make clean` | Removes the local build binary and generated icon PNGs |
+| `make clean` | Removes local build artifacts and generated icon PNGs |
 
-The icon itself is generated from `packaging/gen-icon.py` (three chunky arrows spiraling out from center, in the app's own accent color) into `packaging/icons/com.local.tycoonpluck.svg`; only the 256px `icon.png` rasterized from it is checked into git (it's embedded into the binary via `go:embed` for the window/taskbar icon) — the rest of the size set is generated on demand by `make icons`/`make install`.
+The scalable master icon lives at `packaging/icons/com.local.tycoonpluck.svg`. The checked-in `packaging/icons/icon.png` (256px) is embedded into the binary for the window / taskbar icon; other sizes are generated on demand by `make icons` / `make install`.
 
 ---
 
 ## How to use
 
-1. **Open folder** — pick a **directory** (the picker only lists folders, not files — by design). Files must sit at the **top level** of that folder (subfolders are not scanned). Review and Swipe queue PDFs by default. Tick **Expanded formats** in the sidebar to also queue images, documents, tables, and text files, matching on extension or MIME type. The toggle rescan keeps the current file in front.
-2. **Categories** (left) — start **empty**. Use **Add category** to create your own (saved under `~/.config/tycoonPluck/categories.json`). Nothing is preloaded. Hover a category to reveal a **×** — removes it from the list only; any folder already created for it (and files already sorted into it) is left untouched on disk. Re-adding the same name later picks the same folder back up.
-3. **Assign** — click a category → file moves to `that-folder/CategoryName/` → next PDF. Queue order is **random** each time you open a folder (not A–Z).
-4. **Preview pages** — up to the first **3 pages** render when the PDF has that many; page buttons appear under the preview only when there's more than one to show.
-5. **Open PDF** (or key `O`) — `xdg-open` the current file in your system PDF viewer for a full inspection, then come back to triage.
-6. **Skip** — leave the file in place; continue this session without it. Skips are remembered in the session journal for that directory.
-7. **Undo** — reverse the last **assign** (not skip). If undo fails (e.g. file was deleted externally), fix disk state and try again; the undo entry is kept until it succeeds.
-8. Name clashes in a category folder become `file (1).pdf`, `file (2).pdf`, …
+1. **Open folder** — pick a directory (folders only, by design). Only **top-level** files are queued; subfolders are not scanned. Review and Swipe queue PDFs by default. Empty files and files without a PDF header are skipped and reported. Tick **Expanded formats** in the sidebar to also queue images, documents, tables, and text files (extension or MIME). Rescanning after the toggle keeps the current file in front.
+2. **Categories** (left) — start empty. **Add category** creates one (saved under `~/.config/tycoonPluck/categories.json`). Hover a category to reveal **×** — that removes it from the list only; any folder already created for it on disk is left alone. Re-adding the same name reuses that folder.
+3. **Assign** — click a category (or use a key) → file moves to `that-folder/CategoryName/` → next file. Queue order is **random** each time you open a folder.
+4. **Preview** — Review shows up to the first **3** PDF pages; page buttons appear when more than one page is available.
+5. **Open** (`O`) — `xdg-open` the current file in the system viewer, then return to triage.
+6. **Skip** (`S`) — leave the file in place for this session. Skips are remembered in the session journal for that directory.
+7. **Undo** (`Z`) — reverse the last **assign** (not skip). If undo fails (for example the file was deleted externally), fix disk state and try again; the undo entry is kept until it succeeds.
+8. Name clashes become `file (1).pdf`, `file (2).pdf`, …
 
-### Session journal (per directory)
+### Session journal
 
-Assigns and skips for each opened folder are recorded in a small cache file:
+Assigns and skips for each opened folder are stored at:
 
 `~/.cache/tycoonPluck/session.json` (or `$XDG_CACHE_HOME/tycoonPluck/session.json`)
 
-Reopening the same directory restores undo for files still in their category folders and keeps previously skipped basenames out of the queue. Safe to delete the file to reset session memory.
+Reopening the same directory restores undo for files still in their category folders and keeps previously skipped basenames out of the queue. Delete the file to reset session memory.
 
-### Keyboard (main window focused; not while Add dialog is open)
+### Keyboard
+
+Main window focused; not while the Add dialog is open.
 
 | Key | Action |
 |-----|--------|
 | `1`–`9` | Assign to 1st–9th category |
-| `O` | Open current PDF with system viewer (`xdg-open`) |
+| `O` | Open current file with system viewer |
 | `S` | Skip |
-| `Z` | Undo |
+| `Z` | Undo last assign |
 
-### What v0 does *not* do
+### What this release does not do
 
-- Full multi-page navigation / zoom — preview is capped at the first 3 pages, no zoom
-- Recursive folder scan  
-- Auto-categorize / OCR  
-- Wayland  
-- Distro packages (`.pacman`/AUR/Flatpak) — install target is a manual, user-local `make install` (see [Install](#install-xfce-app-menu-icon-launcher) above)
+- Full multi-page navigation or zoom (preview capped at first 3 pages)
+- Recursive folder scan
+- Auto-categorize / OCR
+- Wayland
+- Distro packages (`.pacman` / AUR / Flatpak) — install is a manual user-local `make install`
 
 ---
 
-## Tests
+## For collaborators
+
+### Tests
 
 ```bash
-cd tycoonPluck
 make test                 # go test -tags x11 ./...
-# or only pure packages (no main binary link):
+# or pure packages only (no main binary link):
 go test ./internal/...
 ```
 
-| Package | Coverage |
-|---------|----------|
+Prefer `make test` or `go test -tags x11 ./...` so the root package links the X11 GLFW backend.
+
+| Package | What it covers |
+|---------|----------------|
 | `internal/sorter` | Queue, assign, skip, undo, collisions, move edge cases |
-| `internal/categories` | Sanitize, load/save, corrupt JSON, non-string entries |
-| `internal/preview` | Real `pdftoppm` on a minimal PDF; skips if tool missing |
+| `internal/categories` | Sanitize, load/save, corrupt JSON |
+| `internal/preview` | Real `pdftoppm` on a minimal PDF; skips if the tool is missing |
 | `internal/ui` | Buttons, labels, shortcuts, modal key guard (Fyne software driver) |
 
-Always prefer **`make test`** or **`go test -tags x11 ./...`** so the root package links the X11 GLFW backend.
-
----
-
-## For testers (v0)
-
-### Happy path
-
-1. Put several PDFs in one folder (not inside category subfolders yet).
-2. `make run`.
-3. Open that folder; confirm count and first-page previews.
-4. Assign a few files; confirm they land under `CategoryName/`.
-5. Skip one; confirm it stayed put and queue advanced.
-6. Undo an assign; confirm file returned and is current again.
-7. Add a category; quit and restart; confirm it is still listed.
-8. Try keys `1`–`9`, `S`, `Z`.
-
-### Please report
-
-- Full terminal output / panic text  
-- Manjaro version, `echo $XDG_SESSION_TYPE`, `go version`  
-- Whether `pdftoppm` works: `pdftoppm -v`  
-- Steps to reproduce (folder layout if relevant)
-
-### Known limitations (expected in v0)
-
-- Progress `n / total` is **session progress** (includes skips), not “files remaining on disk.”  
-- Only top-level files are queued (PDFs, or the expanded-format set when that toggle is on). 
-- Look-and-feel is Fyne’s theme, not GTK/XFCE native widgets.  
-- First preview of a large PDF can take a moment (render is async).  
-
-### Changelog (tester-relevant)
-
-- **v0.1.0+** — Fixed crash on **Open folder** (Fyne 2.8 `FileDialog.Resize` must run after `Show`). Enabled Fyne `fyneDo` migration (preview already uses `fyne.Do`) via `app.SetMetadata` in `main.go` — `FyneApp.toml` alone only gets read next to the executable / `go run` cwd, so it silently didn't apply once installed to `~/.local/bin`; metadata is now baked into the binary so the threading warning stays gone everywhere.
-
----
-
-## Layout
+### Layout
 
 ```
 tycoonPluck/
-  plan.md
   README.md
   Makefile
   main.go
   go.mod
   FyneApp.toml
-  packaging/
-    gen-icon.py                     # regenerates the icon SVG
-    com.local.tycoonpluck.desktop   # app launcher entry
-    icons/
-      com.local.tycoonpluck.svg     # scalable master icon
-      icon.png                      # 256px, checked in, go:embed'd for window icon
+  packaging/          # desktop entry, icon SVG, install assets
   internal/
-    sorter/       # queue / move / undo
-    categories/   # config
-    preview/      # pdftoppm → image
-    ui/           # Fyne window
+    sorter/           # queue / move / undo
+    categories/       # config
+    preview/          # pdftoppm → image
+    formats/          # PDF vs expanded-format matching
+    session/          # per-directory journal
+    ui/               # Fyne window, Review / Swipe
 ```
 
+### Quick tester path
+
+1. Put several PDFs in one folder (not inside category subfolders yet).
+2. `make run`.
+3. Open that folder; confirm count and previews.
+4. Assign a few files; confirm they land under `CategoryName/`.
+5. Skip one; confirm it stayed put and the queue advanced.
+6. Undo an assign; confirm the file returned and is current again.
+7. Add a category; quit and restart; confirm it is still listed.
+8. Try keys `1`–`9`, `S`, `Z`.
+
+When reporting a problem, include terminal / panic text, Manjaro version, `echo $XDG_SESSION_TYPE`, `go version`, whether `pdftoppm -v` works, and steps to reproduce.
+
+Expected limitations for now: progress `n / total` is session progress (includes skips), not “files remaining on disk”; only top-level files are queued; look-and-feel is Fyne’s theme rather than native GTK/XFCE; the first preview of a large PDF can take a moment.
+
 ---
-
-## Related trees
-
-| Path | Role |
-|------|------|
-| **`tycoonPluck/`** | **Current product (this app)** |
-| `../pdf-sorter/` | Earlier Python/GTK experiment — not for testers |
-| `../plan.md` | Repo index pointing here |

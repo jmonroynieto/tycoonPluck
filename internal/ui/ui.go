@@ -612,10 +612,15 @@ func (ui *App) onExpandedCheck(on bool) {
 
 func (ui *App) loadedStatus() string {
 	n := ui.sorter.Remaining()
-	if ui.sorter.Expanded {
-		return fmt.Sprintf("Loaded %d file(s) to sort.", n)
+	invalid := ui.sorter.RejectedPDFs
+	suffix := ""
+	if invalid > 0 {
+		suffix = fmt.Sprintf(" Skipped %d empty or non-PDF file(s).", invalid)
 	}
-	return fmt.Sprintf("Loaded %d PDF(s) to sort.", n)
+	if ui.sorter.Expanded {
+		return fmt.Sprintf("Loaded %d file(s) to sort.%s", n, suffix)
+	}
+	return fmt.Sprintf("Loaded %d PDF(s) to sort.%s", n, suffix)
 }
 
 func (ui *App) emptyFolderHint() string {

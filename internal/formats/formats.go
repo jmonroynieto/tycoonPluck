@@ -54,9 +54,34 @@ var extKind = map[string]Kind{
 func Accept(path string, expanded bool) bool {
 	k := Classify(path)
 	if k == KindPDF {
-		return true
+		return ViablePDF(path)
 	}
 	return expanded && k != KindOther
+}
+
+// ViablePDF performs the inexpensive checks that are safe to do while a
+// folder is being scanned. It deliberately does not render or fully parse a
+// document: that would make opening a large folder slow. The check excludes
+// empty files and common misnamed downloads before they reach the queue;
+// Poppler remains the authority for rendering a structurally damaged PDF.
+func ViablePDF(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 1024)
+	n, err := f.Read(buf)
+	if n == 0 && err != nil {
+		return false
+	}
+	// ISO 32000 permits a small binary preamble, but requires the PDF header
+	// within the first 1,024 bytes.
+	return bytes.Contains(buf[:n], []byte("%PDF-"))
 }
 
 // Classify identifies the file from its extension first, then MIME

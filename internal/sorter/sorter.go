@@ -29,6 +29,9 @@ type Sorter struct {
 	// Expanded includes images, documents, tables, and text files in the
 	// queue (extension or MIME). PDFs are always eligible.
 	Expanded bool
+	// RejectedPDFs is the number of PDF-looking files excluded by the
+	// lightweight viability check during the most recent scan.
+	RejectedPDFs int
 }
 
 // OpenFolder loads top-level eligible files from dir (non-recursive).
@@ -45,7 +48,7 @@ func (s *Sorter) OpenFolder(dir string) (int, error) {
 		return 0, fmt.Errorf("not a directory: %s", abs)
 	}
 
-	files, err := listEligible(abs, s.Expanded, nil)
+	files, rejected, err := listEligible(abs, s.Expanded, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -58,6 +61,7 @@ func (s *Sorter) OpenFolder(dir string) (int, error) {
 	s.Queue = files
 	s.UndoStack = nil
 	s.TotalStarted = len(files)
+	s.RejectedPDFs = rejected
 	return s.TotalStarted, nil
 }
 
@@ -69,7 +73,7 @@ func (s *Sorter) Rescan(skip map[string]struct{}) error {
 	if s.SourceDir == "" {
 		return nil
 	}
-	files, err := listEligible(s.SourceDir, s.Expanded, skip)
+	files, rejected, err := listEligible(s.SourceDir, s.Expanded, skip)
 	if err != nil {
 		return err
 	}
@@ -102,15 +106,17 @@ func (s *Sorter) Rescan(skip map[string]struct{}) error {
 	})
 	s.Queue = append(kept, added...)
 	s.TotalStarted = handled + len(s.Queue)
+	s.RejectedPDFs = rejected
 	return nil
 }
 
-func listEligible(dir string, expanded bool, skip map[string]struct{}) ([]string, error) {
+func listEligible(dir string, expanded bool, skip map[string]struct{}) ([]string, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var files []string
+	rejected := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -120,12 +126,18 @@ func listEligible(dir string, expanded bool, skip map[string]struct{}) ([]string
 			continue
 		}
 		path := filepath.Join(dir, name)
-		if !formats.Accept(path, expanded) {
+		kind := formats.Classify(path)
+		if kind == formats.KindPDF {
+			if !formats.ViablePDF(path) {
+				rejected++
+				continue
+			}
+		} else if !expanded || kind == formats.KindOther {
 			continue
 		}
 		files = append(files, path)
 	}
-	return files, nil
+	return files, rejected, nil
 }
 
 // Current returns the path of the PDF being triaged, or "".

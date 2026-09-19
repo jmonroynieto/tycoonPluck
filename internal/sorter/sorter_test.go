@@ -119,6 +119,24 @@ func TestOpenFolderFindsOnlyTopLevelPDFsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestOpenFolderRejectsEmptyAndMisnamedPDFs(t *testing.T) {
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "good.pdf"))
+	if err := os.WriteFile(filepath.Join(dir, "empty.pdf"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "download.pdf"), []byte("<html>not a PDF</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Sorter{}
+	if n, err := s.OpenFolder(dir); err != nil || n != 1 {
+		t.Fatalf("OpenFolder = (%d, %v), want (1, nil)", n, err)
+	}
+	if s.RejectedPDFs != 2 {
+		t.Fatalf("RejectedPDFs = %d, want 2", s.RejectedPDFs)
+	}
+}
+
 func TestOpenFolderQueueContainsAllPDFsInSomeOrder(t *testing.T) {
 	dir := t.TempDir()
 	touch(t, filepath.Join(dir, "c.pdf"))

@@ -28,6 +28,25 @@ func TestAcceptPDFOnlyUsesExtensionAndMIME(t *testing.T) {
 	}
 }
 
+func TestViablePDFRejectsEmptyAndMisnamedFiles(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty.pdf")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	misnamed := filepath.Join(dir, "download.pdf")
+	if err := os.WriteFile(misnamed, []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	valid := filepath.Join(dir, "paper.pdf")
+	if err := os.WriteFile(valid, []byte("%PDF-1.7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if Accept(empty, false) || Accept(misnamed, false) || !Accept(valid, false) {
+		t.Fatal("PDF viability filter did not distinguish empty, misnamed, and PDF files")
+	}
+}
+
 func TestAcceptExpandedUsesTerminationsAndMIME(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
